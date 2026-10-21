@@ -27,6 +27,8 @@ class TestTaskPool(unittest.TestCase):
 
 if __name__ == "__main__":
     suite = unittest.TestLoader().loadTestsFromTestCase(TestTaskPool)
+    # Keep the tests for the summary: run() replaces each test in the suite with None
+    all_tests = list(suite)
 
     captured_output = StringIO()
 
@@ -45,7 +47,7 @@ if __name__ == "__main__":
     # Print total, passed, and failed summary
     total_tests = result.testsRun
     failed_tests = [t[0] for t in result.failures + result.errors]
-    passed_tests = [test for test in suite if test not in failed_tests]
+    passed_tests = [test for test in all_tests if test not in failed_tests]
 
     print(f"Total Tests: {total_tests}")
     print(f"Passed: {len(passed_tests)} ({(len(passed_tests) / total_tests) * 100:.2f}%)")
