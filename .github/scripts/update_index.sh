@@ -10,8 +10,7 @@ UNIT_TEST_RESULTS=$(cat "$2")
 
 # function to update the pre-tag with section data
 update_pre() {
-  perl -i -0777 -pe "s{<pre id=\"$1\">.*?</pre>}{
-<pre id=\"$1\">\n$2\n</pre>}gs" "$3"
+  perl -i -0777 -pe "s{<pre id=\"$1\">.*?</pre>}{<pre id=\"$1\">\n$2\n</pre>}gs" "$3"
 }
 
 update_pre "pending" "$TODO_TASKS" "$HTML_FILE"
