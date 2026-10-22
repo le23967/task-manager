@@ -17,6 +17,7 @@ update_pre "pending" "$TODO_TASKS" "$HTML_FILE"
 update_pre "completed" "$DONE_TASKS" "$HTML_FILE"
 update_pre "unittest" "$UNIT_TEST_RESULTS" "$HTML_FILE"
 
+git config --global user.name "github-actions"
 git config --global user.email "github-actions@users.noreply.github.com"
 git add "$HTML_FILE"
 git commit -m "Update $HTML_FILE with new task and test data"
