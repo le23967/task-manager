@@ -26,3 +26,21 @@ task-manager/                # Root directory of the project
         ├── ci.yml           # Workflow to run CI/CD pipeline on PR merge
         └── tracker.yml      # Workflow to automate task tracking in project board
 ```
+
+## How to run
+
+Run the task manager and its unit tests with Python 3:
+
+```bash
+python3 .github/scripts/todo.py
+python3 .github/scripts/todo-test.py
+```
+
+Build and run the Docker image the way `ci.yml` does:
+
+```bash
+docker build -t task-manager:latest .
+docker run --rm -e GITHUB_USER=<your-github-username> task-manager:latest
+```
+
+The container prints the task lists and the test results, updates `index.html` and commits it. Its final `git push` only works in GitHub Actions, where the checkout provides the credentials.
