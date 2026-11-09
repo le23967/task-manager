@@ -1,0 +1,146 @@
+name: GitHub Projects Automation
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  move-issue-to-done:
+    runs-on: ubuntu-latest
+    # The job token only reads the repository (checkout); the project is changed with the PROJECTS_TOKEN secret
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        # Step 1: Checks out the repository to the runner's environment,
+        # ensuring access to the project files for subsequent operations.
+        uses: actions/checkout@v2
+
+      - name: Check if PR is merged
+        # Step 2: Verifies if the pull request is merged.
+        # If merged, it proceeds to move the associated issue to the "Done" column.
+        if: github.event.pull_request.merged == true
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: echo "PR #$PR_NUMBER was merged by $MERGED_BY (merge commit ${MERGE_SHA:0:7}), so the issue it closes moves to Done"
+
+      - name: Move issue to Done
+        # Step 3: Sends a request to the GitHub API to move the associated issue
+        # to the "Done" column (Status: Done) in the GitHub project.
+        # Projects (classic) and its REST API are retired, so this uses the GraphQL API of the current Projects.
+        # GITHUB_TOKEN cannot access projects, so the requests use the PROJECTS_TOKEN secret
+        # (a personal access token (classic) with the project scope) for authentication.
+        if: github.event.pull_request.merged == true
+        env:
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          PROJECT_OWNER: ${{ github.repository_owner }}
+          PROJECT_NUMBER: 3
+          REPO_NAME: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PROJECTS_TOKEN" ]; then
+            echo "::error::The PROJECTS_TOKEN secret is not set"
+            exit 1
+          fi
+
+          # Send one GraphQL request ($1: query, $2: variables as JSON) with curl and print the response.
+          # It runs inside $(...), where bash ignores set -e and captures stdout, so failures are checked here
+          # and reported on stderr: an HTTP error or a GraphQL error makes the call (and the step) fail.
+          graphql() {
+            local response
+            if ! response=$(jq -n --arg query "$1" --argjson variables "$2" '{query: $query, variables: $variables}' |
+              curl --silent --show-error --fail-with-body -X POST https://api.github.com/graphql \
+                -H "Authorization: Bearer $PROJECTS_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data @-); then
+              echo "::error::Request to the GraphQL API failed: $response" >&2
+              return 1
+            fi
+            if jq -e '.errors' <<< "$response" > /dev/null; then
+              echo "::error::GraphQL error: $response" >&2
+              return 1
+            fi
+            echo "$response"
+          }
+
+          # The project, its Status field and the id of the "Done" option
+          project=$(graphql '
+            query($owner: String!, $number: Int!) {
+              user(login: $owner) {
+                projectV2(number: $number) {
+                  id
+                  title
+                  field(name: "Status") { ... on ProjectV2SingleSelectField { id options { id name } } }
+                }
+              }
+            }' "$(jq -n --arg owner "$PROJECT_OWNER" --argjson number "$PROJECT_NUMBER" '{owner: $owner, number: $number}')")
+          project_id=$(jq -r '.data.user.projectV2.id' <<< "$project")
+          field_id=$(jq -r '.data.user.projectV2.field.id' <<< "$project")
+          done_id=$(jq -r '.data.user.projectV2.field.options[] | select(.name == "Done") | .id' <<< "$project")
+          echo "Project: $(jq -r '.data.user.projectV2.title' <<< "$project") ($project_id), Status field $field_id, option Done = $done_id"
+
+          # The issues this pull request closes ("Closes #N"), with their items and Status in the projects
+          pr=$(graphql '
+            query($owner: String!, $repo: String!, $pr: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $pr) {
+                  title
+                  closingIssuesReferences(first: 10) {
+                    nodes {
+                      id
+                      number
+                      title
+                      projectItems(first: 20) {
+                        nodes {
+                          id
+                          project { id }
+                          fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }' "$(jq -n --arg owner "$PROJECT_OWNER" --arg repo "$REPO_NAME" --argjson pr "$PR_NUMBER" '{owner: $owner, repo: $repo, pr: $pr}')")
+          echo "PR #$PR_NUMBER: $(jq -r '.data.repository.pullRequest.title' <<< "$pr")"
+          issues=$(jq -c '.data.repository.pullRequest.closingIssuesReferences.nodes[]' <<< "$pr")
+          if [ -z "$issues" ]; then
+            echo "PR #$PR_NUMBER does not close any issue, so there is nothing to move"
+            exit 0
+          fi
+
+          while read -r issue; do
+            number=$(jq -r '.number' <<< "$issue")
+            item=$(jq -c --arg project "$project_id" '.projectItems.nodes[] | select(.project.id == $project)' <<< "$issue")
+            if [ -n "$item" ]; then
+              item_id=$(jq -r '.id' <<< "$item")
+              before=$(jq -r '.fieldValueByName.name // "no status"' <<< "$item")
+            else
+              # The issue is not on the board yet: add it, then move it
+              added=$(graphql '
+                mutation($project: ID!, $content: ID!) {
+                  addProjectV2ItemById(input: {projectId: $project, contentId: $content}) { item { id } }
+                }' "$(jq -n --arg project "$project_id" --arg content "$(jq -r '.id' <<< "$issue")" '{project: $project, content: $content}')")
+              item_id=$(jq -r '.data.addProjectV2ItemById.item.id' <<< "$added")
+              before="not in the project"
+            fi
+            echo "Issue #$number \"$(jq -r '.title' <<< "$issue")\" is item $item_id, Status: $before"
+
+            moved=$(graphql '
+              mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+                updateProjectV2ItemFieldValue(input: {projectId: $project, itemId: $item, fieldId: $field, value: {singleSelectOptionId: $option}}) {
+                  projectV2Item {
+                    id
+                    updatedAt
+                    content { ... on Issue { number title state } }
+                    fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+                  }
+                }
+              }' "$(jq -n --arg project "$project_id" --arg item "$item_id" --arg field "$field_id" --arg option "$done_id" '{project: $project, item: $item, field: $field, option: $option}')")
+            echo "API response (updateProjectV2ItemFieldValue):"
+            jq . <<< "$moved"
+            echo "Issue #$number Status: $before -> $(jq -r '.data.updateProjectV2ItemFieldValue.projectV2Item.fieldValueByName.name' <<< "$moved")"
+          done <<< "$issues"
