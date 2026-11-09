@@ -24,7 +24,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        run: echo "PR #$PR_NUMBER was merged by $MERGED_BY (merge commit ${MERGE_SHA:0:7}), so the issue it closes moves to Done"
+        # A block scalar (|): in a plain YAML scalar, " #" would start a comment and cut the command short
+        run: |
+          echo "PR #$PR_NUMBER was merged by $MERGED_BY (merge commit ${MERGE_SHA:0:7}), so the issue it closes moves to Done"
 
       - name: Move issue to Done
         # Step 3: Sends a request to the GitHub API to move the associated issue
