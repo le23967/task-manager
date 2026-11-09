@@ -25,6 +25,13 @@ class TestTaskPool(unittest.TestCase):
         self.assertEqual(len(done_tasks), 3)
         self.assertTrue(all(task.status == "Done" for task in done_tasks))
 
+    def test_mark_completed(self):
+        task = Task("Review pull request")
+        self.assertFalse(task.completed)
+        task.mark_completed()
+        self.assertTrue(task.completed)
+        self.assertEqual(task.status, "Done")
+
 if __name__ == "__main__":
     suite = unittest.TestLoader().loadTestsFromTestCase(TestTaskPool)
     # Keep the tests for the summary: run() replaces each test in the suite with None
